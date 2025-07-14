@@ -46,6 +46,8 @@ public class Main {
             netoOutputSelector.put("OrderID");
             netoOutputSelector.put("ShippingOption");
             netoOutputSelector.put("OrderStatus");
+            netoOutputSelector.put("OrderLine"); // Ensure OrderLine is requested to potentially get SKU
+            netoOutputSelector.put("OrderLine.SKU"); // Request SKU specifically
             netoOutputSelector.put("OrderLine.WarehouseID");
             netoOutputSelector.put("OrderLine.ShippingMethod");
             netoOutputSelector.put("OrderLine.ShippingTracking");
@@ -148,8 +150,8 @@ public class Main {
             e.printStackTrace();
         }
 
-        // --- 3. Match Neto OrderIDs to Dropshipzone Serial Numbers ---
-        System.out.println("\n--- Matching Neto OrderIDs to Dropshipzone Serial Numbers ---");
+        // --- 3. Match Neto OrderIDs to Dropshipzone Serial Numbers and Update Neto ---
+        System.out.println("\n--- Matching Neto OrderIDs to Dropshipzone Serial Numbers and Updating Neto ---");
         if (netoOrders != null && dropshipzoneOrders != null) {
             Map<String, JSONObject> dropshipzoneOrdersBySerialNumber = new HashMap<>();
             for (int i = 0; i < dropshipzoneOrders.length(); i++) {
@@ -157,7 +159,6 @@ public class Main {
                 String serialNumber = dzOrder.optString("serial_number", null); // Assuming "serial_number" is the field name
                 if (serialNumber != null && !serialNumber.isEmpty()) {
                     // Remove "-[any_character]" suffix from Dropshipzone serial number for matching
-                    // This regex matches a hyphen followed by any single character at the end of the string
                     String cleanedDzSerialNumber = serialNumber.replaceAll("-[a-zA-Z0-9]$", "");
                     dropshipzoneOrdersBySerialNumber.put(cleanedDzSerialNumber, dzOrder);
                 }
@@ -171,7 +172,6 @@ public class Main {
                 String netoOrderId = netoOrder.optString("OrderID", null);
 
                 if (netoOrderId != null && !netoOrderId.isEmpty()) {
-                    // Search for this Neto OrderID in the cleaned Dropshipzone serial numbers
                     JSONObject matchingDzOrder = dropshipzoneOrdersBySerialNumber.get(netoOrderId);
 
                     if (matchingDzOrder != null) {
@@ -179,7 +179,7 @@ public class Main {
                         String dzDispatchTime = matchingDzOrder.optString("dispatch_time", "N/A");
                         String dzTrackNumber = "N/A";
                         String dzShipmentTitle = "N/A";
-                        String dzShipmentCreateAt = "N/A";
+                        String dzShipmentCreateAt = "N/A"; // This will be the DateShipped for Neto
 
                         JSONArray shipments = matchingDzOrder.optJSONArray("shipment");
                         if (shipments != null && shipments.length() > 0) {
@@ -189,15 +189,54 @@ public class Main {
                             dzShipmentCreateAt = firstShipment.optString("create_at", "N/A");
                         }
 
+                        // --- Determine Neto Shipping Method based on Dropshipzone Title ---
+                        String netoShippingMethod = dzShipmentTitle; // Default to DZ title
+                        if ("TEAM GLOBAL EXPRESS".equalsIgnoreCase(dzShipmentTitle)) {
+                            netoShippingMethod = "TollIpecP&S";
+                        }
+
+                        // --- Determine SKU for Neto Update (Placeholder for now) ---
+                        // In a real scenario, you'd get the SKU from the Neto order's OrderLine.
+                        // For this example, we'll use a placeholder or the first SKU if available.
+                        String netoSkuForUpdate = "SAMPLE_SKU"; // Placeholder SKU
+
+                        // If Neto order has OrderLine, try to get SKU from the first line
+                        JSONArray netoOrderLines = netoOrder.optJSONArray("OrderLine");
+                        if (netoOrderLines != null && netoOrderLines.length() > 0) {
+                            JSONObject firstNetoOrderLine = netoOrderLines.getJSONObject(0);
+                            netoSkuForUpdate = firstNetoOrderLine.optString("SKU", netoSkuForUpdate);
+                        }
+
+
+                        // --- Call NetoAPIClient to update tracking ---
+                        // Ensure dzTrackNumber, netoShippingMethod, and dzShipmentCreateAt are valid before updating
+                        if (!"N/A".equals(dzTrackNumber) && !"N/A".equals(netoShippingMethod) && !"N/A".equals(dzShipmentCreateAt)) {
+                            System.out.println(String.format("  Attempting to update Neto OrderID %s (SKU: %s) with Tracking: %s, Carrier: %s, Shipped Date: %s",
+                                netoOrderId, netoSkuForUpdate, dzTrackNumber, netoShippingMethod, dzShipmentCreateAt));
+                            NetoAPIClient.updateOrderTracking(
+                                httpClient,
+                                netoOrderId,
+                                "Dispatched", // Set Neto OrderStatus to Dispatched
+                                "tracking",   // Send tracking email
+                                netoSkuForUpdate, // Pass the determined SKU
+                                netoShippingMethod, // Use the determined shipping method
+                                dzTrackNumber,
+                                dzShipmentCreateAt
+                            );
+                        } else {
+                            System.out.println("  Skipping Neto update for OrderID " + netoOrderId + ": Missing tracking details from Dropshipzone.");
+                        }
+
                         matchedOrderPairs.add(String.format(
                             "Neto OrderID: %s matched with Dropshipzone Serial Number: %s (Dropshipzone Order ID: %s)\n" +
-                            "  Track Number: %s, Title: %s, Created At: %s\n" +
+                            "  Track Number: %s, Original DZ Title: %s, Neto Shipping Method: %s, Created At: %s\n" +
                             "  Dispatch Time: %s",
                             netoOrderId,
                             matchingDzOrder.optString("serial_number"),
                             matchingDzOrder.optString("order_id"),
                             dzTrackNumber,
-                            dzShipmentTitle,
+                            dzShipmentTitle, // Original DZ title
+                            netoShippingMethod, // The method used for Neto
                             dzShipmentCreateAt,
                             dzDispatchTime
                         ));
