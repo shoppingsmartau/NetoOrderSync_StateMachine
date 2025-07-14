@@ -1,2 +1,4 @@
-/workspaces/NetoStockPriceUpdate/src/main/java/DropshipzoneAPIClient.java
-/workspaces/NetoStockPriceUpdate/src/main/java/LambdaHandler.java
+/workspaces/NetoOrderUpdate/src/main/java/DropshipzoneOrdersAPIClient.java
+/workspaces/NetoOrderUpdate/src/main/java/LambdaHandler.java
+/workspaces/NetoOrderUpdate/src/main/java/Main.java
+/workspaces/NetoOrderUpdate/src/main/java/NetoAPIClient.java

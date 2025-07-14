@@ -1,2 +1,4 @@
+DropshipzoneOrdersAPIClient.class
 LambdaHandler.class
-DropshipzoneAPIClient.class
+Main.class
+NetoAPIClient.class

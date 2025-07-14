@@ -5,89 +5,56 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.example</groupId>
-    <artifactId>dropshipzone-neto-integrator</artifactId>
+    <artifactId>NetoStockPriceUpdate</artifactId>
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
+        <maven.compiler.source>11</maven.compiler.source> <!-- Changed to 11 -->
+        <maven.compiler.target>11</maven.compiler.target> <!-- Changed to 11 -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <aws.java.sdk.version>2.20.108</aws.java.sdk.version> <!-- Keep consistent with your S3 client -->
-        <aws.lambda.java.events.version>3.11.0</aws.lambda.java.events.version> <!-- Updated to a recent stable version -->
-        <org.json.version>20231013</org.json.version> <!-- Ensure this is also recent -->
+        <aws.lambda.java.events.version>3.11.0</aws.lambda.java.events.version>
+        <org.json.version>20240303</org.json.version>
     </properties>
 
     <dependencies>
-        <!-- AWS Lambda Core -->
-        <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-lambda-java-core</artifactId>
-            <version>1.2.2</version>
-        </dependency>
-
-        <!-- AWS Lambda Events (for ScheduledEvent) -->
-        <dependency>
-            <groupId>com.amazonaws</groupId>
-            <artifactId>aws-lambda-java-events</artifactId>
-            <version>${aws.lambda.java.events.version}</version>
-        </dependency>
-
-        <!-- AWS SDK for S3 -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>s3</artifactId>
-            <version>${aws.java.sdk.version}</version>
-        </dependency>
-        <!-- AWS SDK HTTP Client (UrlConnectionHttpClient is for S3 client only) -->
-        <dependency>
-            <groupId>software.amazon.awssdk</groupId>
-            <artifactId>url-connection-client</artifactId>
-            <version>${aws.java.sdk.version}</version>
-        </dependency>
-
-        <!-- JSON Library -->
+        <!-- org.json dependency -->
         <dependency>
             <groupId>org.json</groupId>
             <artifactId>json</artifactId>
             <version>${org.json.version}</version>
         </dependency>
-
-        <!-- JUnit for testing (if you have tests) -->
+        <!-- AWS Lambda Core dependency -->
         <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-api</artifactId>
-            <version>5.10.0</version>
-            <scope>test</scope>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-core</artifactId>
+            <version>1.2.2</version>
         </dependency>
+        <!-- AWS Lambda Events dependency (required for ScheduledEvent) -->
         <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter-engine</artifactId>
-            <version>5.10.0</version>
-            <scope>test</scope>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-lambda-java-events</artifactId>
+            <version>${aws.lambda.java.events.version}</version>
         </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <!-- Plugin to create a single "uber" JAR with all dependencies -->
+            <!-- Maven Compiler Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version> <!-- Compatible with Java 11 -->
+                <configuration>
+                    <source>${maven.compiler.source}</source>
+                    <target>${maven.compiler.target}</target>
+                </configuration>
+            </plugin>
+
+            <!-- Maven Shade Plugin for creating an uber JAR -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.5.2</version>
-                <configuration>
-                    <createDependencyReducedPom>false</createDependencyReducedPom>
-                    <filters>
-                        <filter>
-                            <!-- Exclude unnecessary files that can cause issues or bloat the JAR -->
-                            <artifact>*:*</artifact>
-                            <excludes>
-                                <exclude>META-INF/*.SF</exclude>
-                                <exclude>META-INF/*.DSA</exclude>
-                                <exclude>META-INF/*.RSA</exclude>
-                            </excludes>
-                        </filter>
-                    </filters>
-                </configuration>
+                <version>3.5.1</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -97,9 +64,10 @@
                         <configuration>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass></mainClass> <!-- No main class needed for Lambda -->
+                                    <!-- Removed mainClass as it's not needed for Lambda functions -->
                                 </transformer>
                             </transformers>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
                         </configuration>
                     </execution>
                 </executions>
