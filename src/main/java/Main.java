@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap; // For efficient lookup of Dropshipzone orders by serial number
+import java.util.Arrays; // For Arrays.asList
 
 public class Main {
 
@@ -22,11 +23,29 @@ public class Main {
         // export NETOAPI_KEY="YOUR_NETO_KEY"
         // export DROPSHIPZONE_EMAIL="YOUR_DROPSHIPZONE_EMAIL"
         // export DROPSHIPZONE_PASSWORD="YOUR_DROPSHIPZONE_PASSWORD"
+        // export DROPSHIPZONE_SHIPPING_METHOD_MAP="TEAM GLOBAL EXPRESS:TollIpecP&S,OTHER_DZ_TITLE:OTHER_NETO_METHOD"
 
         // Initialize HttpClient with the same timeouts as in client classes
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(NetoAPIClient.CONNECT_TIMEOUT_MS)) // Using NetoAPIClient's connect timeout
                 .build();
+
+        // --- Parse Dropshipzone Shipping Method Map from Environment Variable ---
+        Map<String, String> dropshipzoneShippingMethodMap = new HashMap<>();
+        String mapString = System.getenv("DROPSHIPZONE_SHIPPING_METHOD_MAP");
+        if (mapString != null && !mapString.isEmpty()) {
+            String[] pairs = mapString.split(",");
+            for (String pair : pairs) {
+                String[] keyValue = pair.split(":");
+                if (keyValue.length == 2) {
+                    dropshipzoneShippingMethodMap.put(keyValue[0].trim(), keyValue[1].trim());
+                } else {
+                    System.err.println("Warning: Invalid format in DROPSHIPZONE_SHIPPING_METHOD_MAP entry: " + pair);
+                }
+            }
+        }
+        System.out.println("Dropshipzone Shipping Method Map loaded: " + dropshipzoneShippingMethodMap);
+
 
         // --- 1. Test Neto API Orders Fetch ---
         System.out.println("\n--- Testing NetoAPIClient.getOrders ---");
@@ -80,6 +99,7 @@ public class Main {
         System.out.println("\n--- Testing DropshipzoneOrdersAPIClient.getOrders (Broad Date Range) ---");
         JSONArray dropshipzoneOrders = null; // Initialize to null
         try {
+            // Corrected call: use DropshipzoneOrdersAPIClient for authentication
             String dropshipzoneToken = DropshipzoneOrdersAPIClient.authenticate(httpClient);
             if (dropshipzoneToken != null) {
                 System.out.println("Dropshipzone authentication successful. Token acquired.");
@@ -189,18 +209,18 @@ public class Main {
                             dzShipmentCreateAt = firstShipment.optString("create_at", "N/A");
                         }
 
-                        // --- Determine Neto Shipping Method based on Dropshipzone Title ---
+                        // --- Determine Neto Shipping Method based on Dropshipzone Title using the map ---
                         String netoShippingMethod = dzShipmentTitle; // Default to DZ title
-                        if ("TEAM GLOBAL EXPRESS".equalsIgnoreCase(dzShipmentTitle)) {
-                            netoShippingMethod = "TollIpecP&S";
+                        if (dropshipzoneShippingMethodMap.containsKey(dzShipmentTitle)) {
+                            netoShippingMethod = dropshipzoneShippingMethodMap.get(dzShipmentTitle);
+                            System.out.println(String.format("  Mapped Dropshipzone Title '%s' to Neto Shipping Method '%s'", dzShipmentTitle, netoShippingMethod));
+                        } else {
+                            System.out.println(String.format("  No mapping found for Dropshipzone Title '%s'. Using original title as Neto Shipping Method.", dzShipmentTitle));
                         }
 
-                        // --- Determine SKU for Neto Update (Placeholder for now) ---
-                        // In a real scenario, you'd get the SKU from the Neto order's OrderLine.
-                        // For this example, we'll use a placeholder or the first SKU if available.
-                        String netoSkuForUpdate = "SAMPLE_SKU"; // Placeholder SKU
 
-                        // If Neto order has OrderLine, try to get SKU from the first line
+                        // --- Determine SKU for Neto Update ---
+                        String netoSkuForUpdate = "UNKNOWN_SKU"; // Default if not found
                         JSONArray netoOrderLines = netoOrder.optJSONArray("OrderLine");
                         if (netoOrderLines != null && netoOrderLines.length() > 0) {
                             JSONObject firstNetoOrderLine = netoOrderLines.getJSONObject(0);
