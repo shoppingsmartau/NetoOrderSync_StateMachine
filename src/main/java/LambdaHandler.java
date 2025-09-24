@@ -28,6 +28,8 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
     private static final String DROPSHIPZONE_EMAIL_ENV = "DROPSHIPZONE_EMAIL";
     private static final String DROPSHIPZONE_PASSWORD_ENV = "DROPSHIPZONE_PASSWORD";
     private static final String DROPSHIPZONE_SHIPPING_METHOD_MAP_ENV = "DROPSHIPZONE_SHIPPING_METHOD_MAP";
+    // New environment variable for the days to subtract
+    private static final String DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV = "DROPSHIPZONE_DAYS_TO_SUBTRACT";
 
     public LambdaHandler() {
         // Initialize HttpClient once per Lambda instance (warm start optimization)
@@ -107,8 +109,22 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
             if (dropshipzoneToken != null) {
                 context.getLogger().log("Dropshipzone authentication successful. Token acquired.");
 
+                // Retrieve and parse the environment variable for days to subtract
+                String daysToSubtractStr = System.getenv(DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV);
+                long daysToSubtract = 10; // Default value in case the env var is not set or is invalid
+                if (daysToSubtractStr != null && !daysToSubtractStr.isEmpty()) {
+                    try {
+                        daysToSubtract = Long.parseLong(daysToSubtractStr);
+                        context.getLogger().log("Using " + daysToSubtract + " days from environment variable: " + DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV);
+                    } catch (NumberFormatException e) {
+                        context.getLogger().log("Warning: Invalid number for " + DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV + ". Using default value of 10.");
+                    }
+                } else {
+                    context.getLogger().log("Warning: " + DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV + " environment variable not found. Using default value of 10.");
+                }
+
                 LocalDate endDate = LocalDate.now();
-                LocalDate startDate = endDate.minusDays(6); // Fetch orders from last 6 days (Dropshipzone limit)
+                LocalDate startDate = endDate.minusDays(daysToSubtract);
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
                 String dzStartDate = startDate.format(formatter);
                 String dzEndDate = endDate.format(formatter);
@@ -139,7 +155,8 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
                 JSONObject dzOrder = dropshipzoneOrders.getJSONObject(i);
                 String serialNumber = dzOrder.optString("serial_number", null);
                 if (serialNumber != null && !serialNumber.isEmpty()) {
-                    String cleanedDzSerialNumber = serialNumber.replaceAll("-[a-zA-Z0-9]$", "");
+                    // Updated regex to remove the hyphen and all trailing digits
+                    String cleanedDzSerialNumber = serialNumber.replaceAll("-\\d+$", ""); 
                     dropshipzoneOrdersBySerialNumber.put(cleanedDzSerialNumber, dzOrder);
                 }
             }
@@ -170,7 +187,7 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
 
                         String netoShippingMethod = dropshipzoneShippingMethodMap.getOrDefault(dzShipmentTitle, dzShipmentTitle);
                         if (!dropshipzoneShippingMethodMap.containsKey(dzShipmentTitle)) {
-                            context.getLogger().log(String.format("  No specific mapping found for Dropshipzone Title '%s'. Using original title as Neto Shipping Method.", dzShipmentTitle));
+                            context.getLogger().log(String.format("   No specific mapping found for Dropshipzone Title '%s'. Using original title as Neto Shipping Method.", dzShipmentTitle));
                         }
 
                         String netoSkuForUpdate = "UNKNOWN_SKU";
@@ -181,7 +198,7 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
                         }
 
                         if (!"N/A".equals(dzTrackNumber) && !"N/A".equals(netoShippingMethod) && !"N/A".equals(dzShipmentCreateAt)) {
-                            context.getLogger().log(String.format("  Attempting to update Neto OrderID %s (SKU: %s) with Tracking: %s, Carrier: %s, Shipped Date: %s",
+                            context.getLogger().log(String.format("   Attempting to update Neto OrderID %s (SKU: %s) with Tracking: %s, Carrier: %s, Shipped Date: %s",
                                 netoOrderId, netoSkuForUpdate, dzTrackNumber, netoShippingMethod, dzShipmentCreateAt));
                             NetoAPIClient.updateOrderTracking(
                                 httpClient,
@@ -195,7 +212,7 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
                             );
                             updatedOrdersCount++;
                         } else {
-                            context.getLogger().log("  Skipping Neto update for OrderID " + netoOrderId + ": Missing tracking details from Dropshipzone.");
+                            context.getLogger().log("   Skipping Neto update for OrderID " + netoOrderId + ": Missing tracking details from Dropshipzone.");
                         }
                     } else {
                         context.getLogger().log("No matching Dropshipzone order found for Neto OrderID: " + netoOrderId);
