@@ -108,7 +108,7 @@ public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
                 context.getLogger().log("Dropshipzone authentication successful. Token acquired.");
 
                 LocalDate endDate = LocalDate.now();
-                LocalDate startDate = endDate.minusDays(14); // Fetch orders from last 14 days (Dropshipzone limit)
+                LocalDate startDate = endDate.minusDays(6); // Fetch orders from last 6 days (Dropshipzone limit)
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
                 String dzStartDate = startDate.format(formatter);
                 String dzEndDate = endDate.format(formatter);
