@@ -1,231 +1,151 @@
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
-import com.amazonaws.services.lambda.runtime.events.ScheduledEvent;
 
 import java.net.http.HttpClient;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
+import java.time.Duration;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/**
- * AWS Lambda handler for synchronizing order tracking from Dropshipzone to Neto.
- * Triggered by a ScheduledEvent (e.g., CloudWatch Event/EventBridge).
- */
-public class LambdaHandler implements RequestHandler<ScheduledEvent, Void> {
+public class LambdaHandler implements RequestHandler<Object, String> {
 
     private final HttpClient httpClient;
-    private final Map<String, String> dropshipzoneShippingMethodMap;
-
-    // Environment variable keys
-    private static final String NETOAPI_USERNAME_ENV = "NETOAPI_USERNAME";
-    private static final String NETOAPI_KEY_ENV = "NETOAPI_KEY";
-    private static final String DROPSHIPZONE_EMAIL_ENV = "DROPSHIPZONE_EMAIL";
-    private static final String DROPSHIPZONE_PASSWORD_ENV = "DROPSHIPZONE_PASSWORD";
-    private static final String DROPSHIPZONE_SHIPPING_METHOD_MAP_ENV = "DROPSHIPZONE_SHIPPING_METHOD_MAP";
-    // New environment variable for the days to subtract
-    private static final String DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV = "DROPSHIPZONE_DAYS_TO_SUBTRACT";
+    private final Map<String, String> dropxlShippingMethodMap;
 
     public LambdaHandler() {
-        // Initialize HttpClient once per Lambda instance (warm start optimization)
+
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(NetoAPIClient.CONNECT_TIMEOUT_MS))
                 .build();
 
-        // Initialize shipping method map from environment variable
-        this.dropshipzoneShippingMethodMap = new HashMap<>();
-        String mapString = System.getenv(DROPSHIPZONE_SHIPPING_METHOD_MAP_ENV);
+        // --- Load Carrier Name → Neto Shipping Method mapping ---
+        this.dropxlShippingMethodMap = new HashMap<>();
+
+        String mapString = System.getenv("DROPXL_SHIPPING_METHOD_MAP");
         if (mapString != null && !mapString.isEmpty()) {
             String[] pairs = mapString.split(",");
             for (String pair : pairs) {
                 String[] keyValue = pair.split(":");
                 if (keyValue.length == 2) {
-                    dropshipzoneShippingMethodMap.put(keyValue[0].trim(), keyValue[1].trim());
+                    dropxlShippingMethodMap.put(keyValue[0].trim(), keyValue[1].trim());
                 } else {
-                    System.err.println("Warning: Invalid format in " + DROPSHIPZONE_SHIPPING_METHOD_MAP_ENV + " entry: " + pair);
+                    System.err.println("Warning: Invalid DROPXL_SHIPPING_METHOD_MAP entry: " + pair);
                 }
             }
         }
-        System.out.println("Dropshipzone Shipping Method Map loaded: " + dropshipzoneShippingMethodMap);
+
+        System.out.println("DropXL Shipping Method Map loaded: " + dropxlShippingMethodMap);
     }
 
     @Override
-    public Void handleRequest(ScheduledEvent event, Context context) {
-        context.getLogger().log("Lambda function invoked by CloudWatch Event at: " + event.getTime());
+    public String handleRequest(Object input, Context context) {
 
-        // Log environment variables for debugging (remove in production if sensitive)
-        context.getLogger().log(NETOAPI_USERNAME_ENV + ": " + System.getenv(NETOAPI_USERNAME_ENV));
-        context.getLogger().log(DROPSHIPZONE_EMAIL_ENV + ": " + System.getenv(DROPSHIPZONE_EMAIL_ENV));
-        context.getLogger().log(DROPSHIPZONE_SHIPPING_METHOD_MAP_ENV + ": " + System.getenv(DROPSHIPZONE_SHIPPING_METHOD_MAP_ENV));
+        HttpClient httpClient = this.httpClient;
 
+        // --- Fetch Neto Pack Orders ---
+        JSONObject netoFilterPayload = new JSONObject();
+        JSONObject netoFilter = new JSONObject();
 
-        // --- 1. Fetch Neto Orders ---
-        context.getLogger().log("\n--- Fetching Neto Orders ---");
-        JSONArray netoOrders = null;
+        JSONArray status = new JSONArray();
+        status.put("Pack");
+        netoFilter.put("OrderStatus", status);
+
+        JSONArray output = new JSONArray();
+        output.put("OrderID");
+        output.put("OrderStatus");
+        output.put("OrderLine");
+        output.put("OrderLine.SKU");
+        output.put("OrderLine.ShippingMethod");
+        output.put("OrderLine.ShippingTracking");
+
+        netoFilter.put("OutputSelector", output);
+        netoFilterPayload.put("Filter", netoFilter);
+
+        JSONArray netoOrders = NetoAPIClient.getOrders(httpClient, netoFilterPayload);
+
+        if (netoOrders == null) {
+            context.getLogger().log("Neto returned null or error.");
+            return "Neto error";
+        }
+
+        context.getLogger().log("Total Neto orders fetched: " + netoOrders.length());
+
+        // --- Fetch DropXL Orders ---
+        String email = System.getenv("DROPXL_EMAIL");
+        String token = System.getenv("DROPXL_TOKEN");
+
+        String startDate = LocalDate.now().minusDays(7).format(DateTimeFormatter.ISO_DATE);
+        String endDate = LocalDate.now().format(DateTimeFormatter.ISO_DATE);
+
+        JSONArray dropxlOrders;
         try {
-            JSONObject netoFilterPayload = new JSONObject();
-            JSONObject netoFilter = new JSONObject();
-            JSONArray netoOrderStatus = new JSONArray();
-            netoOrderStatus.put("Pack"); // Filter by OrderStatus: "Pack"
-            netoFilter.put("OrderStatus", netoOrderStatus);
-            netoFilter.put("WarehouseID", "2"); // Filter by WarehouseID: "2"
-
-            JSONArray netoOutputSelector = new JSONArray();
-            netoOutputSelector.put("OrderID");
-            netoOutputSelector.put("ShippingOption");
-            netoOutputSelector.put("OrderStatus");
-            netoOutputSelector.put("OrderLine"); // Ensure OrderLine is requested to potentially get SKU
-            netoOutputSelector.put("OrderLine.SKU"); // Request SKU specifically
-            netoOutputSelector.put("OrderLine.WarehouseID");
-            netoOutputSelector.put("OrderLine.ShippingMethod");
-            netoOutputSelector.put("OrderLine.ShippingTracking");
-            netoFilter.put("OutputSelector", netoOutputSelector);
-
-            netoFilterPayload.put("Filter", netoFilter);
-
-            context.getLogger().log("Attempting to fetch Neto orders with payload: " + netoFilterPayload.toString(2));
-            netoOrders = NetoAPIClient.getOrders(httpClient, netoFilterPayload);
-
-            if (netoOrders != null && netoOrders.length() > 0) {
-                context.getLogger().log("Total Neto orders fetched: " + netoOrders.length());
-            } else {
-                context.getLogger().log("No Neto orders found matching the criteria.");
-            }
+            dropxlOrders = DropXLOrdersAPIClient.getOrders(httpClient, email, token, startDate, endDate, context);
         } catch (Exception e) {
-            context.getLogger().log("Error during Neto API fetch: " + e.getMessage());
-            e.printStackTrace();
+            context.getLogger().log("DropXL error: " + e.getMessage());
+            return "DropXL error";
         }
 
-        // --- 2. Fetch Dropshipzone Orders ---
-        context.getLogger().log("\n--- Fetching Dropshipzone Orders ---");
-        JSONArray dropshipzoneOrders = null;
-        try {
-            String dropshipzoneToken = DropshipzoneOrdersAPIClient.authenticate(httpClient);
-            if (dropshipzoneToken != null) {
-                context.getLogger().log("Dropshipzone authentication successful. Token acquired.");
+        context.getLogger().log("Total DropXL orders fetched: " + dropxlOrders.length());
 
-                // Retrieve and parse the environment variable for days to subtract
-                String daysToSubtractStr = System.getenv(DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV);
-                long daysToSubtract = 10; // Default value in case the env var is not set or is invalid
-                if (daysToSubtractStr != null && !daysToSubtractStr.isEmpty()) {
-                    try {
-                        daysToSubtract = Long.parseLong(daysToSubtractStr);
-                        context.getLogger().log("Using " + daysToSubtract + " days from environment variable: " + DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV);
-                    } catch (NumberFormatException e) {
-                        context.getLogger().log("Warning: Invalid number for " + DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV + ". Using default value of 10.");
+        // --- Match Neto OrderID ↔ DropXL customer_order_reference ---
+        int updatedCount = 0;
+
+        for (int i = 0; i < netoOrders.length(); i++) {
+
+            JSONObject netoOrder = netoOrders.getJSONObject(i);
+            String netoOrderId = netoOrder.optString("OrderID");
+
+            // Extract SKU
+            String sku = "";
+            JSONArray lines = netoOrder.optJSONArray("OrderLine");
+            if (lines != null && lines.length() > 0) {
+                sku = lines.getJSONObject(0).optString("SKU", "");
+            }
+
+            // Search for matching DropXL order
+            for (int j = 0; j < dropxlOrders.length(); j++) {
+
+                JSONObject dropOrder = dropxlOrders.getJSONObject(j).getJSONObject("order");
+                String dropRef = dropOrder.optString("customer_order_reference");
+
+                if (dropRef.equals(netoOrderId)) {
+
+                    String tracking = dropOrder.optString("shipping_tracking");
+                    String dropxlCarrierName = dropOrder.optString("shipping_option_name");
+                    String sentDate = dropOrder.optString("sent_date");
+
+                    // --- Apply Carrier Name → Neto Shipping Method mapping ---
+                    String netoShippingMethod =
+                            dropxlShippingMethodMap.getOrDefault(dropxlCarrierName, dropxlCarrierName);
+
+                    if (!dropxlShippingMethodMap.containsKey(dropxlCarrierName)) {
+                        context.getLogger().log("No mapping found for DropXL carrier '" +
+                                dropxlCarrierName + "'. Using original carrier name.");
                     }
-                } else {
-                    context.getLogger().log("Warning: " + DROPSHIPZONE_DAYS_TO_SUBTRACT_ENV + " environment variable not found. Using default value of 10.");
+
+                    // --- Update Neto ---
+                    NetoAPIClient.updateOrderTracking(
+                            httpClient,
+                            netoOrderId,
+                            "Sent",
+                            "tracking",
+                            sku,
+                            netoShippingMethod,
+                            tracking,
+                            sentDate
+                    );
+
+                    updatedCount++;
                 }
-
-                LocalDate endDate = LocalDate.now();
-                LocalDate startDate = endDate.minusDays(daysToSubtract);
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-                String dzStartDate = startDate.format(formatter);
-                String dzEndDate = endDate.format(formatter);
-
-                context.getLogger().log("Dropshipzone Date Filter: Start Date = " + dzStartDate + ", End Date = " + dzEndDate);
-
-                dropshipzoneOrders = DropshipzoneOrdersAPIClient.getOrders(
-                    httpClient, dropshipzoneToken, null, dzStartDate, dzEndDate); // No order_ids filter here
-
-                if (dropshipzoneOrders != null && dropshipzoneOrders.length() > 0) {
-                    context.getLogger().log("Total Dropshipzone orders fetched: " + dropshipzoneOrders.length());
-                } else {
-                    context.getLogger().log("No Dropshipzone orders found matching the criteria.");
-                }
-            } else {
-                context.getLogger().log("Dropshipzone authentication failed. Skipping order fetch.");
             }
-        } catch (Exception e) {
-            context.getLogger().log("Error during Dropshipzone API fetch: " + e.getMessage());
-            e.printStackTrace();
         }
 
-        // --- 3. Match Neto OrderIDs to Dropshipzone Serial Numbers and Update Neto ---
-        context.getLogger().log("\n--- Matching Neto OrderIDs to Dropshipzone Serial Numbers and Updating Neto ---");
-        if (netoOrders != null && dropshipzoneOrders != null) {
-            Map<String, JSONObject> dropshipzoneOrdersBySerialNumber = new HashMap<>();
-            for (int i = 0; i < dropshipzoneOrders.length(); i++) {
-                JSONObject dzOrder = dropshipzoneOrders.getJSONObject(i);
-                String serialNumber = dzOrder.optString("serial_number", null);
-                if (serialNumber != null && !serialNumber.isEmpty()) {
-                    // Updated regex to remove the hyphen and all trailing digits
-                    String cleanedDzSerialNumber = serialNumber.replaceAll("-\\d+$", ""); 
-                    dropshipzoneOrdersBySerialNumber.put(cleanedDzSerialNumber, dzOrder);
-                }
-            }
-            context.getLogger().log("Indexed " + dropshipzoneOrdersBySerialNumber.size() + " Dropshipzone orders by CLEANED serial number.");
+        context.getLogger().log("Total Neto orders updated: " + updatedCount);
 
-            int updatedOrdersCount = 0;
-            for (int i = 0; i < netoOrders.length(); i++) {
-                JSONObject netoOrder = netoOrders.getJSONObject(i);
-                String netoOrderId = netoOrder.optString("OrderID", null);
-
-                if (netoOrderId != null && !netoOrderId.isEmpty()) {
-                    JSONObject matchingDzOrder = dropshipzoneOrdersBySerialNumber.get(netoOrderId);
-
-                    if (matchingDzOrder != null) {
-                        context.getLogger().log("Match found: Neto OrderID " + netoOrderId + " with Dropshipzone Serial Number " + matchingDzOrder.optString("serial_number"));
-
-                        String dzTrackNumber = "N/A";
-                        String dzShipmentTitle = "N/A";
-                        String dzShipmentCreateAt = "N/A";
-
-                        JSONArray shipments = matchingDzOrder.optJSONArray("shipment");
-                        if (shipments != null && shipments.length() > 0) {
-                            JSONObject firstShipment = shipments.getJSONObject(0);
-                            dzTrackNumber = firstShipment.optString("track_number", "N/A");
-                            dzShipmentTitle = firstShipment.optString("title", "N/A");
-                            dzShipmentCreateAt = firstShipment.optString("create_at", "N/A");
-                        }
-
-                        String netoShippingMethod = dropshipzoneShippingMethodMap.getOrDefault(dzShipmentTitle, dzShipmentTitle);
-                        if (!dropshipzoneShippingMethodMap.containsKey(dzShipmentTitle)) {
-                            context.getLogger().log(String.format("   No specific mapping found for Dropshipzone Title '%s'. Using original title as Neto Shipping Method.", dzShipmentTitle));
-                        }
-
-                        String netoSkuForUpdate = "UNKNOWN_SKU";
-                        JSONArray netoOrderLines = netoOrder.optJSONArray("OrderLine");
-                        if (netoOrderLines != null && netoOrderLines.length() > 0) {
-                            JSONObject firstNetoOrderLine = netoOrderLines.getJSONObject(0);
-                            netoSkuForUpdate = firstNetoOrderLine.optString("SKU", netoSkuForUpdate);
-                        }
-
-                        if (!"N/A".equals(dzTrackNumber) && !"N/A".equals(netoShippingMethod) && !"N/A".equals(dzShipmentCreateAt)) {
-                            context.getLogger().log(String.format("   Attempting to update Neto OrderID %s (SKU: %s) with Tracking: %s, Carrier: %s, Shipped Date: %s",
-                                netoOrderId, netoSkuForUpdate, dzTrackNumber, netoShippingMethod, dzShipmentCreateAt));
-                            NetoAPIClient.updateOrderTracking(
-                                httpClient,
-                                netoOrderId,
-                                "Dispatched",
-                                "tracking",
-                                netoSkuForUpdate,
-                                netoShippingMethod,
-                                dzTrackNumber,
-                                dzShipmentCreateAt
-                            );
-                            updatedOrdersCount++;
-                        } else {
-                            context.getLogger().log("   Skipping Neto update for OrderID " + netoOrderId + ": Missing tracking details from Dropshipzone.");
-                        }
-                    } else {
-                        context.getLogger().log("No matching Dropshipzone order found for Neto OrderID: " + netoOrderId);
-                    }
-                }
-            }
-            context.getLogger().log("Total Neto orders updated: " + updatedOrdersCount);
-
-        } else {
-            context.getLogger().log("Cannot perform matching: Either Neto orders or Dropshipzone orders were not fetched successfully.");
-        }
-
-        context.getLogger().log("\nLambda execution completed.");
-        return null;
+        return "OK";
     }
 }
