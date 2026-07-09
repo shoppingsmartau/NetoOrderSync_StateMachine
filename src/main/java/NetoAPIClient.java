@@ -94,6 +94,7 @@ public class NetoAPIClient {
             JSONObject order = new JSONObject()
                     .put("OrderID", orderId)
                     .put("OrderStatus", orderStatus)
+                    .put("WarehouseID", "5")        // ⭐ REQUIRED FOR STATUS CHANGE
                     .put("SendOrderEmail", sendOrderEmail)
                     .put("OrderLine", orderLines);
 

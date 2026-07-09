@@ -22,7 +22,6 @@ public class LambdaHandler implements RequestHandler<Object, String> {
                 .connectTimeout(Duration.ofMillis(NetoAPIClient.CONNECT_TIMEOUT_MS))
                 .build();
 
-        // --- Load Carrier Name → Neto Shipping Method mapping ---
         this.dropxlShippingMethodMap = new HashMap<>();
 
         String mapString = System.getenv("DROPXL_SHIPPING_METHOD_MAP");
@@ -59,8 +58,6 @@ public class LambdaHandler implements RequestHandler<Object, String> {
         output.put("OrderStatus");
         output.put("OrderLine");
         output.put("OrderLine.SKU");
-        output.put("OrderLine.ShippingMethod");
-        output.put("OrderLine.ShippingTracking");
 
         netoFilter.put("OutputSelector", output);
         netoFilterPayload.put("Filter", netoFilter);
@@ -131,7 +128,7 @@ public class LambdaHandler implements RequestHandler<Object, String> {
                     NetoAPIClient.updateOrderTracking(
                             httpClient,
                             netoOrderId,
-                            "Sent",
+                            "Dispatched",
                             "tracking",
                             sku,
                             netoShippingMethod,
