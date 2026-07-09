@@ -52,6 +52,7 @@ public class LambdaHandler implements RequestHandler<Object, String> {
         JSONArray status = new JSONArray();
         status.put("Pack");
         netoFilter.put("OrderStatus", status);
+        netoFilter.put("WarehouseID", "5"); // Filter by WarehouseID: "5"
 
         JSONArray output = new JSONArray();
         output.put("OrderID");
@@ -112,19 +113,35 @@ public class LambdaHandler implements RequestHandler<Object, String> {
                 if (dropRef.equals(netoOrderId)) {
 
                     String tracking = dropOrder.optString("shipping_tracking");
-                    String dropxlCarrierName = dropOrder.optString("shipping_option_name");
                     String sentDate = dropOrder.optString("sent_date");
 
-                    // --- Apply Carrier Name → Neto Shipping Method mapping ---
+                    // Extract DropXL carrier fields
+                    int dropxlCarrierId = dropOrder.optInt("shipping_option_id");
+                    String dropxlCarrierName = dropOrder.optString("shipping_option_name");
+
+                    // Apply Carrier Name → Neto Shipping Method mapping
                     String netoShippingMethod =
                             dropxlShippingMethodMap.getOrDefault(dropxlCarrierName, dropxlCarrierName);
 
+                    // Debug logging for carrier mapping
+                    context.getLogger().log(
+                            String.format(
+                                    "DropXL Carrier Debug → ID: %d | Name: %s | Neto Mapped Name: %s",
+                                    dropxlCarrierId,
+                                    dropxlCarrierName,
+                                    netoShippingMethod
+                            )
+                    );
+
+                    // Log unmapped carriers
                     if (!dropxlShippingMethodMap.containsKey(dropxlCarrierName)) {
-                        context.getLogger().log("No mapping found for DropXL carrier '" +
-                                dropxlCarrierName + "'. Using original carrier name.");
+                        context.getLogger().log(
+                                "⚠️ No mapping found for DropXL carrier '" + dropxlCarrierName +
+                                "'. Using original carrier name."
+                        );
                     }
 
-                    // --- Update Neto ---
+                    // Update Neto
                     NetoAPIClient.updateOrderTracking(
                             httpClient,
                             netoOrderId,
