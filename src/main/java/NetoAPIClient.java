@@ -76,6 +76,21 @@ public class NetoAPIClient {
             return;
         }
 
+        // ⭐ NEW VALIDATION — required for safety ⭐
+        boolean hasValidTracking =
+                trackingNumber != null && !trackingNumber.isBlank();
+
+        boolean hasValidCarrier =
+                shippingMethod != null && !shippingMethod.isBlank();
+
+        if (!hasValidTracking || !hasValidCarrier) {
+            System.err.println(
+                    "⛔ Neto update skipped for OrderID " + orderId +
+                    " → Missing carrier or tracking."
+            );
+            return;
+        }
+
         try {
             JSONObject trackingDetails = new JSONObject()
                     .put("ShippingMethod", shippingMethod)
@@ -94,7 +109,7 @@ public class NetoAPIClient {
             JSONObject order = new JSONObject()
                     .put("OrderID", orderId)
                     .put("OrderStatus", orderStatus)
-                    .put("WarehouseID", "5")        // ⭐ REQUIRED FOR STATUS CHANGE
+                    .put("WarehouseID", "5")
                     .put("SendOrderEmail", sendOrderEmail)
                     .put("OrderLine", orderLines);
 

@@ -52,7 +52,7 @@ public class LambdaHandler implements RequestHandler<Object, String> {
         JSONArray status = new JSONArray();
         status.put("Pack");
         netoFilter.put("OrderStatus", status);
-        netoFilter.put("WarehouseID", "5"); // Filter by WarehouseID: "5"
+        netoFilter.put("WarehouseID", "5");
 
         JSONArray output = new JSONArray();
         output.put("OrderID");
@@ -115,15 +115,12 @@ public class LambdaHandler implements RequestHandler<Object, String> {
                     String tracking = dropOrder.optString("shipping_tracking");
                     String sentDate = dropOrder.optString("sent_date");
 
-                    // Extract DropXL carrier fields
                     int dropxlCarrierId = dropOrder.optInt("shipping_option_id");
                     String dropxlCarrierName = dropOrder.optString("shipping_option_name");
 
-                    // Apply Carrier Name → Neto Shipping Method mapping
                     String netoShippingMethod =
                             dropxlShippingMethodMap.getOrDefault(dropxlCarrierName, dropxlCarrierName);
 
-                    // Debug logging for carrier mapping
                     context.getLogger().log(
                             String.format(
                                     "DropXL Carrier Debug → ID: %d | Name: %s | Neto Mapped Name: %s",
@@ -133,7 +130,6 @@ public class LambdaHandler implements RequestHandler<Object, String> {
                             )
                     );
 
-                    // Log unmapped carriers
                     if (!dropxlShippingMethodMap.containsKey(dropxlCarrierName)) {
                         context.getLogger().log(
                                 "⚠️ No mapping found for DropXL carrier '" + dropxlCarrierName +
@@ -141,7 +137,22 @@ public class LambdaHandler implements RequestHandler<Object, String> {
                         );
                     }
 
-                    // Update Neto
+                    // --- NEW VALIDATION: Only update if carrier + tracking exist ---
+                    boolean hasValidTracking =
+                            tracking != null && !tracking.isBlank();
+
+                    boolean hasValidCarrier =
+                            netoShippingMethod != null && !netoShippingMethod.isBlank();
+
+                    if (!hasValidTracking || !hasValidCarrier) {
+                        context.getLogger().log(
+                                "⛔ Skipping update for Neto OrderID " + netoOrderId +
+                                " → Missing carrier or tracking from DropXL."
+                        );
+                        continue; // Skip this order
+                    }
+
+                    // --- Update Neto ---
                     NetoAPIClient.updateOrderTracking(
                             httpClient,
                             netoOrderId,
